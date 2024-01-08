@@ -323,6 +323,7 @@ cdef class _ResultIterator(object):
     cdef bytes _bytes_input
     cdef bint _slurp
     cdef bint _ready
+    cdef int _current_line
 
     def __dealloc__(self):
         self._jq_state_pool.release(self._jq)
@@ -334,6 +335,7 @@ cdef class _ResultIterator(object):
         self._bytes_input = bytes_input
         self._slurp = slurp
         self._ready = False
+        self._current_line = 1  # Initialize line number
         cdef jv_parser* parser = jv_parser_new(0)
         cdef char* cbytes_input = PyBytes_AsString(bytes_input)
         jv_parser_set_buf(parser, cbytes_input, len(bytes_input), 0)
@@ -355,7 +357,7 @@ cdef class _ResultIterator(object):
                 error_message = jv_invalid_get_msg(result)
                 message = jv_string_to_py_string(error_message)
                 jv_free(error_message)
-                raise ValueError(message)
+                raise ValueError(u"parse error at line {}: {}".format(self._current_line, message))
             else:
                 jv_free(result)
                 self._ready = False
@@ -383,12 +385,15 @@ cdef class _ResultIterator(object):
     cdef inline jv _parse_next_input(self) except *:
         cdef jv value = jv_parser_next(self._parser)
         if jv_is_valid(value):
+            # Check for line breaks and update line number
+            self._current_line += self._bytes_input.count(b'\n', value.start, value.end)
             return value
         elif jv_invalid_has_msg(jv_copy(value)):
+            # Report error with line number
             error_message = jv_invalid_get_msg(value)
             message = jv_string_to_py_string(error_message)
             jv_free(error_message)
-            raise ValueError(u"parse error: " + message)
+            raise ValueError(u"parse error at line {}: {}".format(self._current_line, message))
         else:
             jv_free(value)
             raise StopIteration()
